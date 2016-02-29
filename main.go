@@ -52,6 +52,9 @@ func main() {
 	requestSize := flag.Int("rqs", 128, "Request size in byte")
 	responseSize := flag.Int("rps", 256, "Response size in byte, setting for server")
 
+	connStatFileName := flag.String("fs", "ConnStat.txt", "file name to save status of connections")
+	latencyFileName := flag.String("fl", "Latencys.txt", "file name to save latencys of requests")
+
 	flag.Parse()
 
 	rttStep, err := time.ParseDuration(*rttStepStr)
@@ -105,8 +108,8 @@ func main() {
 			for k, v := range tester.Stat.RttHisto {
 				fmt.Println(k, "\t", v)
 			}
-			tester.SaveConnStat("ConnStat.txt")
-			tester.SaveLatencys("Latencys.txt")
+			tester.SaveConnStat(*connStatFileName)
+			tester.SaveLatencys(*latencyFileName)
 		} else {
 			fmt.Println("No response available!")
 		}
