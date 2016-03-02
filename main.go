@@ -46,7 +46,7 @@ func main() {
 	numConn := flag.Int("c", 1, "number of connections")
 	numConcurrentConn := flag.Int("cc", 1, "max number of concurrent connections")
 	numRequestPerConn := flag.Int("r", 100, "number of requests per connection")
-	requestIntervalStr := flag.String("i", "10ms", "interval duration between requests")
+	requestIntervalStr := flag.String("rp", "10ms", "period for sending request,give 0 for full speed")
 	connectIntervalStr := flag.String("ci", "0ms", "min interval duration between connections")
 	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration")
 	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps")
@@ -54,8 +54,8 @@ func main() {
 	requestSize := flag.Int("rqs", 128, "Request size in byte. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
 	responseSize := flag.Int("rps", 256, "Response size in byte. Setting for server. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
 
-	connStatFileName := flag.String("fs", "ConnStat.txt", "file name to save status of connections")
-	latencyFileName := flag.String("fl", "Latencys.txt", "file name to save latencys of requests")
+	connStatFileName := flag.String("fc", "ConnStat.txt", "file name to save status of connections")
+	latencyFileName := flag.String("fr", "Latencys.txt", "file name to save latencys of requests")
 
 	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
 
@@ -282,14 +282,12 @@ func (t *Tester) DoTest() {
 	//launch test connections
 	t.testConnList = make([]*testConn, t.Opt.NumConn)
 	go func() {
-		timer := time.NewTimer(0) //use timer instead of ticker to control the min interval between two connection
 		for i := 0; i < t.Opt.NumConn; i++ {
-			<-timer.C
-			timer = time.NewTimer(t.Opt.ConnectInterval)
 			tc := &testConn{t: t}
 			t.testConnList[i] = tc
 			t.startChan <- true
 			go tc.doTest()
+			time.Sleep(t.Opt.ConnectInterval)
 		}
 	}()
 
@@ -409,13 +407,16 @@ type testConn struct {
 
 func (tc *testConn) doTest() {
 	tc.startTime = time.Now()
-
+	var ticker *time.Ticker
 	//dial connection
 	conn, err := net.Dial(tc.t.Opt.NetType, tc.t.Opt.RemoteAddr)
 
 	defer func() {
 		if conn != nil {
 			conn.Close()
+		}
+		if ticker != nil {
+			ticker.Stop()
 		}
 		<-tc.t.startChan
 		tc.t.finishChan <- tc
@@ -460,6 +461,10 @@ func (tc *testConn) doTest() {
 	}()
 
 	//send request
+	needTick := tc.t.Opt.RequestInterval != 0
+	if needTick {
+		ticker = time.NewTicker(tc.t.Opt.RequestInterval)
+	}
 	for i := 0; i < tc.t.Opt.NumRequestPerConn; i++ {
 		timeStamp, err := time.Now().MarshalBinary()
 		if err != nil {
@@ -471,7 +476,9 @@ func (tc *testConn) doTest() {
 			tc.err = err
 			return
 		}
-		time.Sleep(tc.t.Opt.RequestInterval)
+		if needTick {
+			<-ticker.C
+		}
 	}
 	tc.err = <-recvErrorChan
 	return
