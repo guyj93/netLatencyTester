@@ -48,16 +48,18 @@ func main() {
 	numRequestPerConn := flag.Int("r", 100, "number of requests per connection")
 	requestIntervalStr := flag.String("rp", "10ms", "period for sending request,give 0 for full speed")
 	connectIntervalStr := flag.String("ci", "0ms", "min interval duration between connections")
-	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration")
-	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps")
 
 	requestSize := flag.Int("rqs", 128, "Request size in byte. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
 	responseSize := flag.Int("rps", 256, "Response size in byte. Setting for server. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
 
+	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
+
 	connStatFileName := flag.String("fc", "ConnStat.txt", "file name to save status of connections")
 	latencyFileName := flag.String("fr", "Latencys.txt", "file name to save latencys of requests")
 
-	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
+	outputHistogram := flag.Bool("shisto", false, "Output statistics of histogram")
+	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration in histogram")
+	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps in histogram")
 
 	flag.Parse()
 
@@ -96,13 +98,15 @@ func main() {
 		}
 		tester.DoTest()
 
-		tester.doStatistics()
 		if tester.Stat.NumRtt != 0 {
+			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
 			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
 			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
-			fmt.Println("RTT Histogram( step = ", rttStep, "): ")
-			for k, v := range tester.Stat.RttHisto {
-				fmt.Println(k, "\t", v)
+			if *outputHistogram {
+				fmt.Println("RTT Histogram( step = ", rttStep, "): ")
+				for k, v := range tester.Stat.RttHisto {
+					fmt.Println(k, "\t", v)
+				}
 			}
 			tester.SaveConnStat(*connStatFileName)
 			tester.SaveLatencys(*latencyFileName)
@@ -200,12 +204,13 @@ func (s *Server) handleTestConnection(c net.Conn) {
 }
 
 type TestResultStat struct {
-	NumRtt   int
-	MaxRtt   time.Duration
-	MinRtt   time.Duration
-	AvgRtt   time.Duration
-	StdRtt   time.Duration
-	RttHisto []int
+	ErrConnCount int
+	NumRtt       int
+	MaxRtt       time.Duration
+	MinRtt       time.Duration
+	AvgRtt       time.Duration
+	StdRtt       time.Duration
+	RttHisto     []int
 }
 
 type TestOption struct {
@@ -266,10 +271,7 @@ type Tester struct {
 	finishChan chan *testConn //channel for collecting results
 
 	//result
-	Stat         TestResultStat
-	numRtt       int
-	sumRtt       time.Duration
-	errConnCount int
+	Stat TestResultStat
 }
 
 func NewTester(o *TestOption) *Tester {
@@ -291,13 +293,15 @@ func (t *Tester) DoTest() {
 		}
 	}()
 
-	t.errConnCount = 0
+	errConnCount := 0
 	for i := 0; i < t.Opt.NumConn; i++ {
 		tc := <-t.finishChan
 		if tc.err != nil {
-			t.errConnCount += 1
+			errConnCount += 1
 		}
 	}
+	t.Stat.ErrConnCount = errConnCount
+	t.doStatistics()
 
 }
 func (t *Tester) GetResponseSize() (size int, err error) {
