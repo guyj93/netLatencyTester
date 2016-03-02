@@ -123,7 +123,7 @@ type Server struct {
 	NetType      string
 	LocalAddr    string
 	TcpNoDelay   bool
-	responseData []byte
+	ResponseData []byte
 }
 
 func NewServer(netType string, localAddr string, responseSize int, tcpNoDelay bool) *Server {
@@ -131,12 +131,12 @@ func NewServer(netType string, localAddr string, responseSize int, tcpNoDelay bo
 		NetType:      netType,
 		LocalAddr:    localAddr,
 		TcpNoDelay:   tcpNoDelay,
-		responseData: Krand(responseSize-1-TIME_STAMP_LENGTH, KC_RAND_KIND_ALL),
+		ResponseData: Krand(responseSize-1-TIME_STAMP_LENGTH, KC_RAND_KIND_ALL),
 	}
 }
 
 func (s *Server) GetResponseSize() int {
-	return TIME_STAMP_LENGTH + len(s.responseData) + 1
+	return TIME_STAMP_LENGTH + len(s.ResponseData) + 1
 }
 
 func (s *Server) StartListen() {
@@ -192,7 +192,7 @@ func (s *Server) handleTestConnection(c net.Conn) {
 		}
 
 		//handle msg
-		m.Data = s.responseData
+		m.Data = s.ResponseData
 
 		//send response
 		sendChan <- &m
