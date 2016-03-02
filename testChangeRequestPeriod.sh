@@ -1,0 +1,16 @@
+./netLatencyTester -q -ad $1 -r 1000 -rp 30ms
+./netLatencyTester -q -ad $1 -r 1000 -rp 10ms
+./netLatencyTester -q -ad $1 -r 1000 -rp 3ms
+./netLatencyTester -q -ad $1 -r 1000 -rp 1ms
+./netLatencyTester -q -ad $1 -r 1000 -rp 300us
+./netLatencyTester -q -ad $1 -r 1000 -rp 100us
+./netLatencyTester -q -ad $1 -r 1000 -rp 30us
+./netLatencyTester -q -ad $1 -r 1000 -rp 10us
+./netLatencyTester -q -ad $1 -r 1000 -rp 3us
+./netLatencyTester -q -ad $1 -r 1000 -rp 1us
+./netLatencyTester -q -ad $1 -r 1000 -rp 300ns
+./netLatencyTester -q -ad $1 -r 1000 -rp 100ns
+./netLatencyTester -q -ad $1 -r 1000 -rp 30ns
+./netLatencyTester -q -ad $1 -r 1000 -rp 10ns
+./netLatencyTester -q -ad $1 -r 1000 -rp 3ns
+./netLatencyTester -q -ad $1 -r 1000 -rp 1ns

@@ -60,7 +60,7 @@ func main() {
 	outputHistogram := flag.Bool("shisto", false, "Output statistics of histogram")
 	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration in histogram")
 	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps in histogram")
-
+	outputQuiet := flag.Bool("q", false, "just show valid RTT number min avg max std RTT")
 	flag.Parse()
 
 	rttStep, err := time.ParseDuration(*rttStepStr)
@@ -81,6 +81,7 @@ func main() {
 		fmt.Println("True response size: ", server.GetResponseSize(), " bytes.")
 		server.StartListen()
 	} else {
+		//is client
 		opt := NewTestOption(
 			"tcp", *remoteAddr,
 			*numConn, *numConcurrentConn, connectInterval, *numRequestPerConn,
@@ -88,17 +89,28 @@ func main() {
 			*tcpNoDelay,
 			rttStep, *numRttSteps,
 		)
-		fmt.Println("True request size: ", opt.GetRequestSize(), " bytes.")
+		if !*outputQuiet {
+			fmt.Println("True request size: ", opt.GetRequestSize(), " bytes.")
+		}
 		tester := NewTester(opt)
 		respSize, err := tester.GetResponseSize()
 		if err != nil {
 			log.Fatal("Can't get response: ", err)
 		} else {
-			fmt.Println("Response size from server: ", respSize, " bytes.")
+			if !*outputQuiet {
+				fmt.Println("Response size from server: ", respSize, " bytes.")
+			}
 		}
 		tester.DoTest()
-
-		if tester.Stat.NumRtt != 0 {
+		if *outputQuiet {
+			fmt.Println(
+				tester.Stat.NumRtt, "\t",
+				tester.Stat.MinRtt, "\t",
+				tester.Stat.AvgRtt, "\t",
+				tester.Stat.MaxRtt, "\t",
+				tester.Stat.StdRtt,
+			)
+		} else if tester.Stat.NumRtt != 0 {
 			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
 			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
 			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
@@ -359,6 +371,7 @@ func (t *Tester) doStatistics() {
 		}
 		numRtt += l
 	}
+	t.Stat.NumRtt = numRtt
 	if numRtt == 0 {
 		return
 	}
@@ -393,7 +406,6 @@ func (t *Tester) doStatistics() {
 			tmp += d * d
 		}
 	}
-	t.Stat.NumRtt = numRtt
 	t.Stat.AvgRtt = avgRtt
 	t.Stat.MaxRtt = maxRtt
 	t.Stat.MinRtt = minRtt
