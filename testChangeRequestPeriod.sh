@@ -1,17 +1,17 @@
-./netLatencyTester -q -ad $1 -r 1000 -rp 30ms
-./netLatencyTester -q -ad $1 -r 1000 -rp 10ms
-./netLatencyTester -q -ad $1 -r 1000 -rp 3ms
-./netLatencyTester -q -ad $1 -r 1000 -rp 1ms
-./netLatencyTester -q -ad $1 -r 1000 -rp 300us
-./netLatencyTester -q -ad $1 -r 1000 -rp 100us
-./netLatencyTester -q -ad $1 -r 1000 -rp 30us
-./netLatencyTester -q -ad $1 -r 1000 -rp 10us
-./netLatencyTester -q -ad $1 -r 1000 -rp 3us
-./netLatencyTester -q -ad $1 -r 1000 -rp 1us
-./netLatencyTester -q -ad $1 -r 1000 -rp 300ns
-./netLatencyTester -q -ad $1 -r 1000 -rp 100ns
-./netLatencyTester -q -ad $1 -r 1000 -rp 30ns
-./netLatencyTester -q -ad $1 -r 1000 -rp 10ns
-./netLatencyTester -q -ad $1 -r 1000 -rp 3ns
-./netLatencyTester -q -ad $1 -r 1000 -rp 1ns
-./netLatencyTester -q -ad $1 -r 1000 -rp 0ns
+./netLatencyTester $* -rp 30ms
+./netLatencyTester $* -rp 10ms
+./netLatencyTester $* -rp 3ms
+./netLatencyTester $* -rp 1ms
+./netLatencyTester $* -rp 300us
+./netLatencyTester $* -rp 100us
+./netLatencyTester $* -rp 30us
+./netLatencyTester $* -rp 10us
+./netLatencyTester $* -rp 3us
+./netLatencyTester $* -rp 1us
+./netLatencyTester $* -rp 300ns
+./netLatencyTester $* -rp 100ns
+./netLatencyTester $* -rp 30ns
+./netLatencyTester $* -rp 10ns
+./netLatencyTester $* -rp 3ns
+./netLatencyTester $* -rp 1ns
+./netLatencyTester $* -rp 0ns
