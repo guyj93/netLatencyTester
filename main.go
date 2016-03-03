@@ -112,16 +112,16 @@ func main() {
 				tester.Stat.MinRtt, "\t",
 				tester.Stat.AvgRtt, "\t",
 				tester.Stat.MaxRtt, "\t",
-				tester.Stat.StdRtt, "\t"
-				tSpeed,"\t",
+				tester.Stat.StdRtt, "\t",
+				tSpeed, "\t",
 				rSpeed,
 			)
 		} else if tester.Stat.NumRtt != 0 {
 			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
 			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
 			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
-			fmt.Println("Average transfer speed: ",tSpeed," bytes/s")
-			fmt.Println("Average receive speed: ",rSpeed," bytes/s")
+			fmt.Println("Average transfer speed: ", tSpeed, " bytes/s")
+			fmt.Println("Average receive speed: ", rSpeed, " bytes/s")
 			if *outputHistogram {
 				fmt.Println("RTT Histogram( step = ", rttStep, "): ")
 				for k, v := range tester.Stat.RttHisto {
