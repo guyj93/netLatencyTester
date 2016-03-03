@@ -14,3 +14,4 @@
 ./netLatencyTester -q -ad $1 -r 1000 -rp 10ns
 ./netLatencyTester -q -ad $1 -r 1000 -rp 3ns
 ./netLatencyTester -q -ad $1 -r 1000 -rp 1ns
+./netLatencyTester -q -ad $1 -r 1000 -rp 0ns
