@@ -89,6 +89,7 @@ func main() {
 			*tcpNoDelay,
 			rttStep, *numRttSteps,
 		)
+
 		if !*outputQuiet {
 			fmt.Println("True request size: ", opt.GetRequestSize(), " bytes.")
 		}
@@ -102,18 +103,25 @@ func main() {
 			}
 		}
 		tester.DoTest()
+		testTimeSeconds := float64(tester.StopTime.Sub(tester.StartTime)) / float64(time.Second)
+		tSpeed := float64(tester.Stat.NumRtt) * float64(tester.Opt.GetRequestSize()) / (testTimeSeconds)
+		rSpeed := float64(tester.Stat.NumRtt) * float64(respSize) / (testTimeSeconds)
 		if *outputQuiet {
 			fmt.Println(
 				tester.Stat.NumRtt, "\t",
 				tester.Stat.MinRtt, "\t",
 				tester.Stat.AvgRtt, "\t",
 				tester.Stat.MaxRtt, "\t",
-				tester.Stat.StdRtt,
+				tester.Stat.StdRtt, "\t"
+				tSpeed,"\t",
+				rSpeed,
 			)
 		} else if tester.Stat.NumRtt != 0 {
 			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
 			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
 			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
+			fmt.Println("Average transfer speed: ",tSpeed," bytes/s")
+			fmt.Println("Average receive speed: ",rSpeed," bytes/s")
 			if *outputHistogram {
 				fmt.Println("RTT Histogram( step = ", rttStep, "): ")
 				for k, v := range tester.Stat.RttHisto {
@@ -283,7 +291,9 @@ type Tester struct {
 	finishChan chan *testConn //channel for collecting results
 
 	//result
-	Stat TestResultStat
+	StartTime time.Time
+	StopTime  time.Time
+	Stat      TestResultStat
 }
 
 func NewTester(o *TestOption) *Tester {
@@ -292,9 +302,10 @@ func NewTester(o *TestOption) *Tester {
 func (t *Tester) DoTest() {
 	t.startChan = make(chan bool, t.Opt.NumConcurrentConn)
 	t.finishChan = make(chan *testConn, t.Opt.NumConcurrentConn*2)
-
-	//launch test connections
 	t.testConnList = make([]*testConn, t.Opt.NumConn)
+
+	t.StartTime = time.Now()
+	//launch test connections
 	go func() {
 		for i := 0; i < t.Opt.NumConn; i++ {
 			tc := &testConn{t: t}
@@ -313,6 +324,9 @@ func (t *Tester) DoTest() {
 		}
 	}
 	t.Stat.ErrConnCount = errConnCount
+
+	t.StopTime = time.Now()
+
 	t.doStatistics()
 
 }
