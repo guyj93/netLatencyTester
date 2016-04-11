@@ -39,7 +39,7 @@ func Krand(size int, kind int) []byte {
 }
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU())
+	numThread := flag.Int("nt", 0, "number of threads, 0 for number of cpus")
 	isServer := flag.Bool("s", false, "run as a server")
 	localAddr := flag.String("laddr", ":12345", "local address host:port to listen on")
 	remoteAddr := flag.String("ad", "localhost:12345", "remote server address host:port")
@@ -62,7 +62,11 @@ func main() {
 	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps in histogram")
 	outputQuiet := flag.Bool("q", false, "just show valid RTT number min avg max std RTT")
 	flag.Parse()
-
+	if *numThread == 0 {
+		runtime.GOMAXPROCS(runtime.NumCPU())
+	} else {
+		runtime.GOMAXPROCS(*numThread)
+	}
 	rttStep, err := time.ParseDuration(*rttStepStr)
 	if err != nil {
 		log.Fatal(err)
@@ -104,8 +108,9 @@ func main() {
 		}
 		tester.DoTest()
 		testTimeSeconds := float64(tester.StopTime.Sub(tester.StartTime)) / float64(time.Second)
-		tSpeed := float64(tester.Stat.NumRtt) * float64(tester.Opt.GetRequestSize()) / (testTimeSeconds)
-		rSpeed := float64(tester.Stat.NumRtt) * float64(respSize) / (testTimeSeconds)
+		requestRate := float64(tester.Stat.NumRtt) / (testTimeSeconds)
+		tSpeed := requestRate * float64(tester.Opt.GetRequestSize()) * 8
+		rSpeed := requestRate * float64(respSize) * 8
 		if *outputQuiet {
 			fmt.Println(
 				tester.Stat.NumRtt, "\t",
@@ -113,6 +118,7 @@ func main() {
 				tester.Stat.AvgRtt, "\t",
 				tester.Stat.MaxRtt, "\t",
 				tester.Stat.StdRtt, "\t",
+				requestRate, "\t",
 				tSpeed, "\t",
 				rSpeed,
 			)
@@ -120,8 +126,9 @@ func main() {
 			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
 			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
 			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
-			fmt.Println("Average transfer speed: ", tSpeed, " bytes/s")
-			fmt.Println("Average receive speed: ", rSpeed, " bytes/s")
+			fmt.Println("Request per second: ")
+			fmt.Println("Average transfer speed: ", tSpeed, "bps")
+			fmt.Println("Average receive speed: ", rSpeed, "bps")
 			if *outputHistogram {
 				fmt.Println("RTT Histogram( step = ", rttStep, "): ")
 				for k, v := range tester.Stat.RttHisto {
