@@ -126,7 +126,7 @@ func main() {
 			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
 			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
 			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
-			fmt.Println("Request per second: ")
+			fmt.Println("Request per second: ", requestRate)
 			fmt.Println("Average transfer speed: ", tSpeed, "bps")
 			fmt.Println("Average receive speed: ", rSpeed, "bps")
 			if *outputHistogram {
