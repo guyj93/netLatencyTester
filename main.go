@@ -60,7 +60,7 @@ func main() {
 	outputHistogram := flag.Bool("shisto", false, "Output statistics of histogram")
 	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration in histogram")
 	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps in histogram")
-	outputQuiet := flag.Bool("q", false, "just show valid RTT number min avg max std RTT")
+	outputQuiet := flag.Bool("q", false, "quiet mode, just show number, min, avg, max, std (of RTT), realRequestRate, realTxSpeed, realRxSpeed")
 	flag.Parse()
 	if *numThread == 0 {
 		runtime.GOMAXPROCS(runtime.NumCPU())
