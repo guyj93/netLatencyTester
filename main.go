@@ -54,8 +54,8 @@ func main() {
 
 	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
 
-	connStatFileName := flag.String("fc", "ConnStat.txt", "file name to save status of connections")
-	latencyFileName := flag.String("fr", "Latencys.txt", "file name to save latencys of requests")
+	connStatFileName := flag.String("fc", "", "file name to save status of connections, empty for not to save the report")
+	latencyFileName := flag.String("fr", "", "file name to save latencys of requests, empty for not to save the report")
 
 	outputHistogram := flag.Bool("shisto", false, "Output statistics of histogram")
 	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration in histogram")
@@ -108,9 +108,14 @@ func main() {
 		}
 		tester.DoTest()
 		testTimeSeconds := float64(tester.StopTime.Sub(tester.StartTime)) / float64(time.Second)
-		requestRate := float64(tester.Stat.NumRtt) / (testTimeSeconds)
-		tSpeed := requestRate * float64(tester.Opt.GetRequestSize()) * 8
-		rSpeed := requestRate * float64(respSize) * 8
+		requestRate := float64(0)
+		tSpeed := float64(0)
+		rSpeed := float64(0)
+		if testTimeSeconds != float64(0) {
+			requestRate = float64(tester.Stat.NumRtt) / (testTimeSeconds)
+			tSpeed = requestRate * float64(tester.Opt.GetRequestSize()) * 8
+			rSpeed = requestRate * float64(respSize) * 8
+		}
 		if *outputQuiet {
 			fmt.Println(
 				tester.Stat.NumRtt, "\t",
@@ -122,23 +127,29 @@ func main() {
 				tSpeed, "\t",
 				rSpeed,
 			)
-		} else if tester.Stat.NumRtt != 0 {
-			fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
-			fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
-			fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
-			fmt.Println("Request per second: ", requestRate)
-			fmt.Println("Average transfer speed: ", tSpeed, "bps")
-			fmt.Println("Average receive speed: ", rSpeed, "bps")
-			if *outputHistogram {
-				fmt.Println("RTT Histogram( step = ", rttStep, "): ")
-				for k, v := range tester.Stat.RttHisto {
-					fmt.Println(k, "\t", v)
-				}
-			}
-			tester.SaveConnStat(*connStatFileName)
-			tester.SaveLatencys(*latencyFileName)
 		} else {
-			fmt.Println("No response available!")
+			if tester.Stat.NumRtt != 0 {
+				fmt.Println("Number of connects stop with error: ", tester.Stat.ErrConnCount)
+				fmt.Println("Number of valid RTT: ", tester.Stat.NumRtt)
+				fmt.Println("min/avg/max/std of RTT:", tester.Stat.MinRtt, "/", tester.Stat.AvgRtt, "/", tester.Stat.MaxRtt, "/", tester.Stat.StdRtt)
+				fmt.Println("Request per second: ", requestRate)
+				fmt.Println("Average transfer speed: ", tSpeed, "bps")
+				fmt.Println("Average receive speed: ", rSpeed, "bps")
+				if *outputHistogram {
+					fmt.Println("RTT Histogram( step = ", rttStep, "): ")
+					for k, v := range tester.Stat.RttHisto {
+						fmt.Println(k, "\t", v)
+					}
+				}
+			} else {
+				fmt.Println("No response available!")
+			}
+		}
+		if *connStatFileName != "" {
+			tester.SaveConnStat(*connStatFileName)
+		}
+		if *latencyFileName != "" {
+			tester.SaveLatencys(*latencyFileName)
 		}
 	}
 }
@@ -335,7 +346,6 @@ func (t *Tester) DoTest() {
 	t.StopTime = time.Now()
 
 	t.doStatistics()
-
 }
 func (t *Tester) GetResponseSize() (size int, err error) {
 	conn, err := net.Dial(t.Opt.NetType, t.Opt.RemoteAddr)
