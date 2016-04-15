@@ -39,7 +39,7 @@ func Krand(size int, kind int) []byte {
 }
 
 func main() {
-	numThread := flag.Int("nt", 0, "number of threads, 0 for number of cpus")
+	numThread := flag.Int("cpus", 0, "number of cpus will be used, 0 for number of logic cores on your machine")
 	isServer := flag.Bool("s", false, "run as a server")
 	localAddr := flag.String("laddr", ":12345", "local address host:port to listen on")
 	remoteAddr := flag.String("ad", "localhost:12345", "remote server address host:port")
