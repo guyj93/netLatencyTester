@@ -23,6 +23,9 @@ const (
 )
 
 func Krand(size int, kind int) []byte {
+	if size < 0 {
+		size = 0
+	}
 	kinds := [][]int{[]int{10, 48}, []int{26, 97}, []int{26, 65}}
 	result := make([]byte, size)
 	is_all := kind > 2 || kind < 0
@@ -52,12 +55,14 @@ func main() {
 	requestSize := flag.Int("rqs", 128, "Request size in byte. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
 	responseSize := flag.Int("rps", 256, "Response size in byte. Setting for server. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
 
+	waitResponse := flag.Bool("wr", false, "wait response before sending another request. Won't wait by default.")
+
 	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
 
 	connStatFileName := flag.String("fc", "", "file name to save status of connections, empty for not to save the report")
 	latencyFileName := flag.String("fr", "", "file name to save latencys of requests, empty for not to save the report")
 
-	outputHistogram := flag.Bool("shisto", false, "Output statistics of histogram")
+	outputHistogram := flag.Bool("shisto", false, "show statistics of histogram")
 	rttStepStr := flag.String("sd", "10us", "rtt statistics step duration in histogram")
 	numRttSteps := flag.Int("sn", 100, "number of rtt statistics steps in histogram")
 	outputQuiet := flag.Bool("q", false, "quiet mode, just show number, min, avg, max, std (of RTT), realRequestRate, realTxSpeed, realRxSpeed")
@@ -65,7 +70,9 @@ func main() {
 	if *numThread == 0 {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 	} else {
-		runtime.GOMAXPROCS(*numThread)
+		if n := runtime.GOMAXPROCS(*numThread); n < 1 {
+			log.Fatal("Set number of cpus failed.")
+		}
 	}
 	rttStep, err := time.ParseDuration(*rttStepStr)
 	if err != nil {
@@ -90,6 +97,7 @@ func main() {
 			"tcp", *remoteAddr,
 			*numConn, *numConcurrentConn, connectInterval, *numRequestPerConn,
 			requestInterval, *requestSize,
+			*waitResponse,
 			*tcpNoDelay,
 			rttStep, *numRttSteps,
 		)
@@ -192,18 +200,19 @@ func (s *Server) StartListen() {
 
 	for {
 		conn, err := l.Accept()
-		if s.TcpNoDelay {
-			if tcpConn, ok := conn.(*net.TCPConn); ok {
-				if err := tcpConn.SetNoDelay(true); err != nil {
-					log.Fatal(err)
-				}
-			}
-		}
 		if err != nil {
 			if conn != nil {
 				conn.Close()
 			}
 			log.Fatal(err)
+		}
+		if s.TcpNoDelay {
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				if err := tcpConn.SetNoDelay(true); err != nil {
+					conn.Close()
+					log.Fatal(err)
+				}
+			}
 		}
 		go s.handleTestConnection(conn)
 	}
@@ -251,7 +260,8 @@ type TestResultStat struct {
 	RttHisto     []int
 }
 
-type TestOption struct {
+type Option struct {
+	//Test options
 	NetType           string
 	RemoteAddr        string
 	NumConn           int
@@ -260,8 +270,10 @@ type TestOption struct {
 	NumRequestPerConn int
 	RequestInterval   time.Duration
 	RequestData       []byte
+	WaitResponse      bool
 	TcpNoDelay        bool
 
+	//Statistics options
 	RttStep     time.Duration
 	NumRttSteps int
 }
@@ -274,11 +286,12 @@ func NewTestOption(netType string,
 	numRequestPerConn int,
 	requestInterval time.Duration,
 	requestSize int,
+	waitResponse bool,
 	tcpNoDelay bool,
 	rttStep time.Duration,
 	numRttSteps int,
-) *TestOption {
-	return &TestOption{
+) *Option {
+	return &Option{
 		NetType:           netType,
 		RemoteAddr:        remoteAddr,
 		NumConn:           numConn,
@@ -288,18 +301,19 @@ func NewTestOption(netType string,
 		RequestInterval:   requestInterval,
 		RequestData:       Krand(requestSize-TIME_STAMP_LENGTH-1, KC_RAND_KIND_ALL),
 		TcpNoDelay:        tcpNoDelay,
+		WaitResponse:      waitResponse,
 		RttStep:           rttStep,
 		NumRttSteps:       numRttSteps,
 	}
 }
 
-func (o *TestOption) GetRequestSize() int {
+func (o *Option) GetRequestSize() int {
 	return len(o.RequestData) + TIME_STAMP_LENGTH + 1
 }
 
-type Tester struct {
+type Client struct {
 	//options
-	Opt *TestOption
+	Opt *Option
 
 	//list of testConn
 	testConnList []*testConn
@@ -314,41 +328,41 @@ type Tester struct {
 	Stat      TestResultStat
 }
 
-func NewTester(o *TestOption) *Tester {
-	return &Tester{Opt: o}
+func NewTester(o *Option) *Client {
+	return &Client{Opt: o}
 }
-func (t *Tester) DoTest() {
-	t.startChan = make(chan bool, t.Opt.NumConcurrentConn)
-	t.finishChan = make(chan *testConn, t.Opt.NumConcurrentConn*2)
-	t.testConnList = make([]*testConn, t.Opt.NumConn)
+func (c *Client) DoTest() {
+	c.startChan = make(chan bool, c.Opt.NumConcurrentConn)
+	c.finishChan = make(chan *testConn, c.Opt.NumConcurrentConn*2)
+	c.testConnList = make([]*testConn, c.Opt.NumConn)
 
-	t.StartTime = time.Now()
+	c.StartTime = time.Now()
 	//launch test connections
 	go func() {
-		for i := 0; i < t.Opt.NumConn; i++ {
-			tc := &testConn{t: t}
-			t.testConnList[i] = tc
-			t.startChan <- true
+		for i := 0; i < c.Opt.NumConn; i++ {
+			tc := &testConn{c: c}
+			c.testConnList[i] = tc
+			c.startChan <- true
 			go tc.doTest()
-			time.Sleep(t.Opt.ConnectInterval)
+			time.Sleep(c.Opt.ConnectInterval)
 		}
 	}()
 
 	errConnCount := 0
-	for i := 0; i < t.Opt.NumConn; i++ {
-		tc := <-t.finishChan
+	for i := 0; i < c.Opt.NumConn; i++ {
+		tc := <-c.finishChan
 		if tc.err != nil {
 			errConnCount += 1
 		}
 	}
-	t.Stat.ErrConnCount = errConnCount
+	c.Stat.ErrConnCount = errConnCount
 
-	t.StopTime = time.Now()
+	c.StopTime = time.Now()
 
-	t.doStatistics()
+	c.doStatistics()
 }
-func (t *Tester) GetResponseSize() (size int, err error) {
-	conn, err := net.Dial(t.Opt.NetType, t.Opt.RemoteAddr)
+func (c *Client) GetResponseSize() (size int, err error) {
+	conn, err := net.Dial(c.Opt.NetType, c.Opt.RemoteAddr)
 	if err != nil {
 		return 0, err
 	}
@@ -359,31 +373,31 @@ func (t *Tester) GetResponseSize() (size int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	req := Msg{timeStamp, t.Opt.RequestData}
+	req := Msg{timeStamp, c.Opt.RequestData}
 	resp, err := requestMsg(bw, br, &req)
 	return len(resp.TimeStamp) + len(resp.Data), err
 }
 
-func (t *Tester) SaveConnStat(fileName string) error {
+func (c *Client) SaveConnStat(fileName string) error {
 	f, err := os.Create(fileName)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(f, t.Opt.NumConn)
+	fmt.Fprintln(f, c.Opt.NumConn)
 	fmt.Fprintln(f, "ConnID\tNumResp\tStartTime\tStopTime\tError")
-	for k, tc := range t.testConnList {
+	for k, tc := range c.testConnList {
 		fmt.Fprintln(f, k, "\t", len(tc.latencyList), "\t", tc.startTime, "\t", tc.stopTime, "\t", tc.err)
 	}
 	return f.Close()
 }
 
-func (t *Tester) SaveLatencys(fileName string) error {
+func (c *Client) SaveLatencys(fileName string) error {
 	f, err := os.Create(fileName)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(f, "ConnID\tRqstID\tLatency")
-	for i, tc := range t.testConnList {
+	for i, tc := range c.testConnList {
 		for j, latency := range tc.latencyList {
 			fmt.Fprintln(f, i, "\t", j, "\t", latency)
 		}
@@ -391,18 +405,18 @@ func (t *Tester) SaveLatencys(fileName string) error {
 	return f.Close()
 }
 
-func (t *Tester) doStatistics() {
+func (c *Client) doStatistics() {
 	numRtt := 0
 	minRtt := time.Duration(time.Hour)
 
-	for _, tc := range t.testConnList {
+	for _, tc := range c.testConnList {
 		l := len(tc.latencyList)
 		if l > 0 {
 			minRtt = tc.latencyList[0]
 		}
 		numRtt += l
 	}
-	t.Stat.NumRtt = numRtt
+	c.Stat.NumRtt = numRtt
 	if numRtt == 0 {
 		return
 	}
@@ -410,12 +424,12 @@ func (t *Tester) doStatistics() {
 	//calculate mean value min/max value and histgram
 	sumRtt := float64(0)
 	maxRtt := time.Duration(0)
-	rttHisto := make([]int, t.Opt.NumRttSteps)
-	for _, tc := range t.testConnList {
+	rttHisto := make([]int, c.Opt.NumRttSteps)
+	for _, tc := range c.testConnList {
 		for _, rtt := range tc.latencyList {
-			stepNum := int64(rtt / t.Opt.RttStep)
-			if stepNum >= int64(t.Opt.NumRttSteps) {
-				stepNum = int64(t.Opt.NumRttSteps - 1)
+			stepNum := int64(rtt / c.Opt.RttStep)
+			if stepNum >= int64(c.Opt.NumRttSteps) {
+				stepNum = int64(c.Opt.NumRttSteps - 1)
 			}
 			rttHisto[stepNum]++
 			sumRtt += float64(rtt)
@@ -431,21 +445,21 @@ func (t *Tester) doStatistics() {
 
 	//calculate standard deviation
 	tmp := float64(0)
-	for _, tc := range t.testConnList {
+	for _, tc := range c.testConnList {
 		for _, rtt := range tc.latencyList {
 			d := float64(rtt - avgRtt)
 			tmp += d * d
 		}
 	}
-	t.Stat.AvgRtt = avgRtt
-	t.Stat.MaxRtt = maxRtt
-	t.Stat.MinRtt = minRtt
-	t.Stat.RttHisto = rttHisto
-	t.Stat.StdRtt = time.Duration(math.Sqrt(tmp / float64(numRtt)))
+	c.Stat.AvgRtt = avgRtt
+	c.Stat.MaxRtt = maxRtt
+	c.Stat.MinRtt = minRtt
+	c.Stat.RttHisto = rttHisto
+	c.Stat.StdRtt = time.Duration(math.Sqrt(tmp / float64(numRtt)))
 }
 
 type testConn struct {
-	t           *Tester
+	c           *Client
 	startTime   time.Time
 	stopTime    time.Time
 	err         error
@@ -456,7 +470,7 @@ func (tc *testConn) doTest() {
 	tc.startTime = time.Now()
 	var ticker *time.Ticker
 	//dial connection
-	conn, err := net.Dial(tc.t.Opt.NetType, tc.t.Opt.RemoteAddr)
+	conn, err := net.Dial(tc.c.Opt.NetType, tc.c.Opt.RemoteAddr)
 
 	defer func() {
 		if conn != nil {
@@ -465,11 +479,17 @@ func (tc *testConn) doTest() {
 		if ticker != nil {
 			ticker.Stop()
 		}
-		<-tc.t.startChan
-		tc.t.finishChan <- tc
+		<-tc.c.startChan
+		tc.c.finishChan <- tc
 		tc.stopTime = time.Now()
 	}()
-	if tc.t.Opt.TcpNoDelay {
+
+	if err != nil {
+		tc.err = err
+		return
+	}
+
+	if tc.c.Opt.TcpNoDelay {
 		if tcpConn, ok := conn.(*net.TCPConn); ok {
 			if err := tcpConn.SetNoDelay(true); err != nil {
 				tc.err = err
@@ -478,56 +498,84 @@ func (tc *testConn) doTest() {
 		}
 	}
 
-	if err != nil {
-		tc.err = err
-		return
-	}
 	bw := bufio.NewWriter(conn)
 	br := bufio.NewReader(conn)
 
-	tc.latencyList = make([]time.Duration, 0, tc.t.Opt.NumRequestPerConn)
-	recvErrorChan := make(chan error, 1)
+	tc.latencyList = make([]time.Duration, 0, tc.c.Opt.NumRequestPerConn)
 
-	//receive and handle response
-	go func() {
-		for i := 0; i < tc.t.Opt.NumRequestPerConn; i++ {
-			m, err := waitMsg(br)
+	if tc.c.Opt.WaitResponse { //will wait response before sending another message
+		//send request, wait and handle response
+		needTick := tc.c.Opt.RequestInterval != 0
+		if needTick {
+			ticker = time.NewTicker(tc.c.Opt.RequestInterval)
+		}
+		for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
+			sendTime := time.Now()
+			timeStamp, err := sendTime.MarshalBinary()
 			if err != nil {
-				recvErrorChan <- err
+				tc.err = err
 				return
 			}
-			var sendTime time.Time
-			err = sendTime.UnmarshalBinary(m.TimeStamp)
-			if err != nil { //normarlly won't happen
-				recvErrorChan <- err
+			err = sendMsg(bw, &Msg{timeStamp, tc.c.Opt.RequestData})
+			if err != nil {
+				tc.err = err
+				return
+			}
+			_, err = waitMsg(br)
+			if err != nil {
+				tc.err = err
 				return
 			}
 			tc.latencyList = append(tc.latencyList, time.Now().Sub(sendTime))
+			if needTick {
+				<-ticker.C
+			}
 		}
-		recvErrorChan <- nil
-	}()
 
-	//send request
-	needTick := tc.t.Opt.RequestInterval != 0
-	if needTick {
-		ticker = time.NewTicker(tc.t.Opt.RequestInterval)
-	}
-	for i := 0; i < tc.t.Opt.NumRequestPerConn; i++ {
-		timeStamp, err := time.Now().MarshalBinary()
-		if err != nil {
-			tc.err = err
-			return
-		}
-		err = sendMsg(bw, &Msg{timeStamp, tc.t.Opt.RequestData})
-		if err != nil {
-			tc.err = err
-			return
-		}
+	} else { //won't wait response before sending another message
+
+		//launch routine for receiving and handling response
+		recvErrorChan := make(chan error, 1)
+		go func() {
+			for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
+				m, err := waitMsg(br)
+				if err != nil {
+					recvErrorChan <- err
+					return
+				}
+				var sendTime time.Time
+				err = sendTime.UnmarshalBinary(m.TimeStamp)
+				if err != nil { //normarlly won't happen
+					recvErrorChan <- err
+					return
+				}
+				tc.latencyList = append(tc.latencyList, time.Now().Sub(sendTime))
+			}
+			recvErrorChan <- nil
+		}()
+
+		//send request
+		needTick := tc.c.Opt.RequestInterval != 0
 		if needTick {
-			<-ticker.C
+			ticker = time.NewTicker(tc.c.Opt.RequestInterval)
 		}
+		for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
+			timeStamp, err := time.Now().MarshalBinary()
+			if err != nil {
+				tc.err = err
+				return
+			}
+			err = sendMsg(bw, &Msg{timeStamp, tc.c.Opt.RequestData})
+			if err != nil {
+				tc.err = err
+				return
+			}
+			if needTick {
+				<-ticker.C
+			}
+		}
+		tc.err = <-recvErrorChan //record error happen in receive routine
 	}
-	tc.err = <-recvErrorChan
 	return
 }
 
