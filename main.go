@@ -93,7 +93,7 @@ func main() {
 		server.StartListen()
 	} else {
 		//is client
-		opt := NewTestOption(
+		opt := NewClientOption(
 			"tcp", *remoteAddr,
 			*numConn, *numConcurrentConn, connectInterval, *numRequestPerConn,
 			requestInterval, *requestSize,
@@ -105,7 +105,7 @@ func main() {
 		if !*outputQuiet {
 			fmt.Println("True request size: ", opt.GetRequestSize(), " bytes.")
 		}
-		tester := NewTester(opt)
+		tester := NewClient(opt)
 		respSize, err := tester.GetResponseSize()
 		if err != nil {
 			log.Fatal("Can't get response: ", err)
@@ -162,11 +162,62 @@ func main() {
 	}
 }
 
-const TIME_STAMP_LENGTH = 15
+var TIME_STAMP_LENGTH = TimeStampLength()
+
+func TimeStampLength() int {
+	tmp := &Msg{time.Now(), nil}
+	data, _ := tmp.marshalTimeStamp()
+	return len(data)
+}
 
 type Msg struct {
-	TimeStamp []byte
+	TimeStamp time.Time
 	Data      []byte
+}
+
+func (m *Msg) marshalTimeStamp() ([]byte, error) {
+	return m.TimeStamp.MarshalBinary()
+}
+
+func (m *Msg) unmarshalTimeStamp(data []byte) error {
+	return m.TimeStamp.UnmarshalBinary(data)
+}
+
+func (m *Msg) Send(bw *bufio.Writer) error {
+	timeStampData, err := m.marshalTimeStamp()
+	if err != nil {
+		return err
+	}
+	_, err = bw.Write(timeStampData)
+	if err != nil {
+		return err
+	}
+	_, err = bw.Write(m.Data)
+	if err != nil {
+		return err
+	}
+	err = bw.WriteByte('\n')
+	if err != nil {
+		return err
+	}
+	return bw.Flush()
+}
+
+func (m *Msg) Wait(br *bufio.Reader) (err error) {
+	//read timeStampData
+	timeStampData := make([]byte, TIME_STAMP_LENGTH)
+	for i := 0; i < TIME_STAMP_LENGTH; i++ {
+		timeStampData[i], err = br.ReadByte()
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = m.unmarshalTimeStamp(timeStampData); err != nil {
+		return err
+	}
+	m.Data, err = br.ReadBytes('\n')
+	return err
 }
 
 type Server struct {
@@ -225,7 +276,7 @@ func (s *Server) handleTestConnection(c net.Conn) {
 		bw := bufio.NewWriter(c)
 		for {
 			m := <-sendChan
-			err := sendMsg(bw, m)
+			err := m.Send(bw)
 			if err != nil {
 				c.Close()
 				return
@@ -236,7 +287,8 @@ func (s *Server) handleTestConnection(c net.Conn) {
 	br := bufio.NewReader(c) //receiving and handling
 	for {
 		//recv request
-		m, err := waitMsg(br)
+		m := &Msg{}
+		err := m.Wait(br)
 		if err != nil {
 			c.Close()
 			return
@@ -246,7 +298,7 @@ func (s *Server) handleTestConnection(c net.Conn) {
 		m.Data = s.ResponseData
 
 		//send response
-		sendChan <- &m
+		sendChan <- m
 	}
 }
 
@@ -260,7 +312,7 @@ type TestResultStat struct {
 	RttHisto     []int
 }
 
-type Option struct {
+type ClientOption struct {
 	//Test options
 	NetType           string
 	RemoteAddr        string
@@ -278,7 +330,7 @@ type Option struct {
 	NumRttSteps int
 }
 
-func NewTestOption(netType string,
+func NewClientOption(netType string,
 	remoteAddr string,
 	numConn int,
 	numConcurrentConn int,
@@ -290,8 +342,8 @@ func NewTestOption(netType string,
 	tcpNoDelay bool,
 	rttStep time.Duration,
 	numRttSteps int,
-) *Option {
-	return &Option{
+) *ClientOption {
+	return &ClientOption{
 		NetType:           netType,
 		RemoteAddr:        remoteAddr,
 		NumConn:           numConn,
@@ -307,13 +359,13 @@ func NewTestOption(netType string,
 	}
 }
 
-func (o *Option) GetRequestSize() int {
+func (o *ClientOption) GetRequestSize() int {
 	return len(o.RequestData) + TIME_STAMP_LENGTH + 1
 }
 
 type Client struct {
 	//options
-	Opt *Option
+	Opt *ClientOption
 
 	//list of testConn
 	testConnList []*testConn
@@ -328,7 +380,7 @@ type Client struct {
 	Stat      TestResultStat
 }
 
-func NewTester(o *Option) *Client {
+func NewClient(o *ClientOption) *Client {
 	return &Client{Opt: o}
 }
 func (c *Client) DoTest() {
@@ -369,13 +421,15 @@ func (c *Client) GetResponseSize() (size int, err error) {
 	defer conn.Close()
 	br := bufio.NewReader(conn)
 	bw := bufio.NewWriter(conn)
-	timeStamp, err := time.Now().MarshalBinary()
-	if err != nil {
+
+	m := Msg{time.Now(), c.Opt.RequestData}
+	if err = m.Send(bw); err != nil {
 		return 0, err
 	}
-	req := Msg{timeStamp, c.Opt.RequestData}
-	resp, err := requestMsg(bw, br, &req)
-	return len(resp.TimeStamp) + len(resp.Data), err
+	if err = m.Wait(br); err != nil {
+		return 0, err
+	}
+	return TIME_STAMP_LENGTH + len(m.Data), err
 }
 
 func (c *Client) SaveConnStat(fileName string) error {
@@ -502,7 +556,8 @@ func (tc *testConn) doTest() {
 	br := bufio.NewReader(conn)
 
 	tc.latencyList = make([]time.Duration, 0, tc.c.Opt.NumRequestPerConn)
-
+	request := &Msg{time.Time{}, tc.c.Opt.RequestData}
+	response := &Msg{}
 	if tc.c.Opt.WaitResponse { //will wait response before sending another message
 		//send request, wait and handle response
 		needTick := tc.c.Opt.RequestInterval != 0
@@ -511,18 +566,12 @@ func (tc *testConn) doTest() {
 		}
 		for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
 			sendTime := time.Now()
-			timeStamp, err := sendTime.MarshalBinary()
-			if err != nil {
+			request.TimeStamp = sendTime
+			if err = request.Send(bw); err != nil {
 				tc.err = err
 				return
 			}
-			err = sendMsg(bw, &Msg{timeStamp, tc.c.Opt.RequestData})
-			if err != nil {
-				tc.err = err
-				return
-			}
-			_, err = waitMsg(br)
-			if err != nil {
+			if err = response.Wait(br); err != nil {
 				tc.err = err
 				return
 			}
@@ -537,19 +586,13 @@ func (tc *testConn) doTest() {
 		//launch routine for receiving and handling response
 		recvErrorChan := make(chan error, 1)
 		go func() {
+			var err error
 			for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
-				m, err := waitMsg(br)
-				if err != nil {
+				if err = response.Wait(br); err != nil {
 					recvErrorChan <- err
 					return
 				}
-				var sendTime time.Time
-				err = sendTime.UnmarshalBinary(m.TimeStamp)
-				if err != nil { //normarlly won't happen
-					recvErrorChan <- err
-					return
-				}
-				tc.latencyList = append(tc.latencyList, time.Now().Sub(sendTime))
+				tc.latencyList = append(tc.latencyList, time.Now().Sub(response.TimeStamp))
 			}
 			recvErrorChan <- nil
 		}()
@@ -560,13 +603,8 @@ func (tc *testConn) doTest() {
 			ticker = time.NewTicker(tc.c.Opt.RequestInterval)
 		}
 		for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
-			timeStamp, err := time.Now().MarshalBinary()
-			if err != nil {
-				tc.err = err
-				return
-			}
-			err = sendMsg(bw, &Msg{timeStamp, tc.c.Opt.RequestData})
-			if err != nil {
+			request.TimeStamp = time.Now()
+			if err = request.Send(bw); err != nil {
 				tc.err = err
 				return
 			}
@@ -577,41 +615,4 @@ func (tc *testConn) doTest() {
 		tc.err = <-recvErrorChan //record error happen in receive routine
 	}
 	return
-}
-
-func requestMsg(bw *bufio.Writer, br *bufio.Reader, request *Msg) (response Msg, err error) {
-	err = sendMsg(bw, request)
-	if err != nil {
-		return response, err
-	}
-	return waitMsg(br)
-}
-
-func sendMsg(bw *bufio.Writer, m *Msg) error {
-	_, err := bw.Write(m.TimeStamp)
-	if err != nil {
-		return err
-	}
-	_, err = bw.Write(m.Data)
-	if err != nil {
-		return err
-	}
-	err = bw.WriteByte('\n')
-	if err != nil {
-		return err
-	}
-	return bw.Flush()
-}
-
-func waitMsg(br *bufio.Reader) (m Msg, err error) {
-	m.TimeStamp = make([]byte, TIME_STAMP_LENGTH)
-
-	for i := 0; i < TIME_STAMP_LENGTH; i++ {
-		m.TimeStamp[i], err = br.ReadByte()
-		if err != nil {
-			return m, err
-		}
-	}
-	m.Data, err = br.ReadBytes('\n')
-	return m, err
 }
