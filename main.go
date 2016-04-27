@@ -3,8 +3,10 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -52,11 +54,12 @@ func main() {
 	requestIntervalStr := flag.String("rp", "10ms", "period for sending request,give 0 for full speed")
 	connectIntervalStr := flag.String("ci", "0ms", "min interval duration between connections")
 
-	requestSize := flag.Int("rqs", 128, "Request size in byte. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
-	responseSize := flag.Int("rps", 256, "Response size in byte. Setting for server. Larger than "+strconv.Itoa(TIME_STAMP_LENGTH+1)+" .")
+	requestSize := flag.Int("rqs", 128, "Request size in byte. Larger than "+strconv.Itoa(MSG_EXTRA_SIZE)+" .")
+	responseSize := flag.Int("rps", 256, "Response size in byte. Setting for server. Larger than "+strconv.Itoa(MSG_EXTRA_SIZE)+" .")
 
 	waitResponse := flag.Bool("wr", false, "wait response before sending another request. Won't wait by default.")
 
+	bufioSize := flag.Int("bufio", 0, "buffer size of bufio, 0 for no bufio, -1 for auto size.")
 	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
 
 	connStatFileName := flag.String("fc", "", "file name to save status of connections, empty for not to save the report")
@@ -88,7 +91,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if *isServer {
-		server := NewServer("tcp", *localAddr, *responseSize, *tcpNoDelay)
+		server := NewServer("tcp", *localAddr, *responseSize, *tcpNoDelay, *bufioSize)
 		fmt.Println("True response size: ", server.GetResponseSize(), " bytes.")
 		server.StartListen()
 	} else {
@@ -99,6 +102,7 @@ func main() {
 			requestInterval, *requestSize,
 			*waitResponse,
 			*tcpNoDelay,
+			*bufioSize,
 			rttStep, *numRttSteps,
 		)
 
@@ -162,82 +166,99 @@ func main() {
 	}
 }
 
-var TIME_STAMP_LENGTH = TimeStampLength()
-
-func TimeStampLength() int {
-	tmp := &Msg{time.Now(), nil}
-	data, _ := tmp.marshalTimeStamp()
-	return len(data)
-}
+const TIME_STAMP_LENGTH = 8
+const DATA_SIZE_DATA_LENGTH = 4
+const MSG_EXTRA_SIZE = TIME_STAMP_LENGTH + DATA_SIZE_DATA_LENGTH
 
 type Msg struct {
-	TimeStamp time.Time
-	Data      []byte
+	timeStampData []byte
+	dataSizeData  []byte
+	data          []byte
 }
 
-func (m *Msg) marshalTimeStamp() ([]byte, error) {
-	return m.TimeStamp.MarshalBinary()
+func NewMsg() *Msg {
+	return &Msg{
+		make([]byte, TIME_STAMP_LENGTH),
+		make([]byte, DATA_SIZE_DATA_LENGTH),
+		nil,
+	}
 }
 
-func (m *Msg) unmarshalTimeStamp(data []byte) error {
-	return m.TimeStamp.UnmarshalBinary(data)
+func (m *Msg) SetTimeStamp(timeStamp int64) {
+	binary.LittleEndian.PutUint64(m.timeStampData, uint64(timeStamp))
+	return
 }
 
-func (m *Msg) Send(bw *bufio.Writer) error {
-	timeStampData, err := m.marshalTimeStamp()
-	if err != nil {
-		return err
-	}
-	_, err = bw.Write(timeStampData)
-	if err != nil {
-		return err
-	}
-	_, err = bw.Write(m.Data)
-	if err != nil {
-		return err
-	}
-	err = bw.WriteByte('\n')
-	if err != nil {
-		return err
-	}
-	return bw.Flush()
+func (m *Msg) GetTimeStamp() (timeStamp int64) {
+	return int64(binary.LittleEndian.Uint64(m.timeStampData))
 }
 
-func (m *Msg) Wait(br *bufio.Reader) (err error) {
+//notice that the function won't copy data
+func (m *Msg) SetDataAs(src *Msg) {
+	m.dataSizeData = src.dataSizeData
+	m.data = src.data
+}
+
+func (m *Msg) SetData(data []byte) {
+	binary.LittleEndian.PutUint32(m.dataSizeData, uint32(len(data)))
+	m.data = data
+}
+
+func (m *Msg) GetData() []byte {
+	return m.data
+}
+
+func (m *Msg) Send(w io.Writer) (err error) {
+	if _, err = w.Write(m.timeStampData); err != nil {
+		return err
+	}
+	if _, err = w.Write(m.dataSizeData); err != nil {
+		return err
+	}
+	_, err = w.Write(m.data)
+	if bw, ok := w.(*bufio.Writer); ok {
+		err = bw.Flush()
+	}
+	return err
+}
+
+func (m *Msg) Wait(r io.Reader) (err error) {
 	//read timeStampData
-	timeStampData := make([]byte, TIME_STAMP_LENGTH)
-	for i := 0; i < TIME_STAMP_LENGTH; i++ {
-		timeStampData[i], err = br.ReadByte()
-		if err != nil {
-			return err
-		}
-	}
-
-	if err = m.unmarshalTimeStamp(timeStampData); err != nil {
+	if _, err = io.ReadFull(r, m.timeStampData); err != nil {
 		return err
 	}
-	m.Data, err = br.ReadBytes('\n')
+
+	if _, err = io.ReadFull(r, m.dataSizeData); err != nil {
+		return err
+	}
+
+	dataSize := binary.LittleEndian.Uint32(m.dataSizeData)
+	m.data = make([]byte, dataSize)
+	_, err = io.ReadFull(r, m.data)
 	return err
 }
 
 type Server struct {
-	NetType      string
-	LocalAddr    string
-	TcpNoDelay   bool
-	ResponseData []byte
+	NetType          string
+	LocalAddr        string
+	TcpNoDelay       bool
+	BufioSize        int
+	ResponseData     []byte
+	responseTemplate *Msg
 }
 
-func NewServer(netType string, localAddr string, responseSize int, tcpNoDelay bool) *Server {
+func NewServer(netType string, localAddr string, responseSize int, tcpNoDelay bool, bufioSize int) *Server {
 	return &Server{
 		NetType:      netType,
 		LocalAddr:    localAddr,
 		TcpNoDelay:   tcpNoDelay,
-		ResponseData: Krand(responseSize-1-TIME_STAMP_LENGTH, KC_RAND_KIND_ALL),
+		BufioSize:    bufioSize,
+		ResponseData: Krand(responseSize-MSG_EXTRA_SIZE, KC_RAND_KIND_ALL),
 	}
 }
 
 func (s *Server) GetResponseSize() int {
-	return TIME_STAMP_LENGTH + len(s.ResponseData) + 1
+	return len(s.ResponseData) + MSG_EXTRA_SIZE
 }
 
 func (s *Server) StartListen() {
@@ -248,6 +269,9 @@ func (s *Server) StartListen() {
 	defer l.Close()
 
 	fmt.Println("Listen requests on ", s.LocalAddr)
+
+	s.responseTemplate = NewMsg()
+	s.responseTemplate.SetData(s.ResponseData)
 
 	for {
 		conn, err := l.Accept()
@@ -269,33 +293,42 @@ func (s *Server) StartListen() {
 	}
 }
 
-func (s *Server) handleTestConnection(c net.Conn) {
+func (s *Server) handleTestConnection(conn net.Conn) {
+	var w io.Writer
+	var r io.Reader
+	if s.BufioSize == 0 {
+		w = conn
+		r = conn
+	} else if s.BufioSize < 0 {
+		w = bufio.NewWriterSize(conn, len(s.responseTemplate.data)+MSG_EXTRA_SIZE)
+		r = bufio.NewReader(conn) //default size 4096
+	} else {
+		w = bufio.NewWriterSize(conn, s.BufioSize)
+		r = bufio.NewReaderSize(conn, s.BufioSize)
+	}
 	sendChan := make(chan *Msg, 256)
-
-	go func(c net.Conn, sendChan chan *Msg) { //sending
-		bw := bufio.NewWriter(c)
+	go func() { //sending
 		for {
 			m := <-sendChan
-			err := m.Send(bw)
+			err := m.Send(w)
 			if err != nil {
-				c.Close()
+				conn.Close()
 				return
 			}
 		}
-	}(c, sendChan)
+	}()
 
-	br := bufio.NewReader(c) //receiving and handling
 	for {
 		//recv request
-		m := &Msg{}
-		err := m.Wait(br)
+		m := NewMsg()
+		err := m.Wait(r)
 		if err != nil {
-			c.Close()
+			conn.Close()
 			return
 		}
 
 		//handle msg
-		m.Data = s.ResponseData
+		m.SetDataAs(s.responseTemplate)
 
 		//send response
 		sendChan <- m
@@ -324,6 +357,7 @@ type ClientOption struct {
 	RequestData       []byte
 	WaitResponse      bool
 	TcpNoDelay        bool
+	BufioSize         int
 
 	//Statistics options
 	RttStep     time.Duration
@@ -340,6 +374,7 @@ func NewClientOption(netType string,
 	requestSize int,
 	waitResponse bool,
 	tcpNoDelay bool,
+	bufioSize int,
 	rttStep time.Duration,
 	numRttSteps int,
 ) *ClientOption {
@@ -351,8 +386,9 @@ func NewClientOption(netType string,
 		ConnectInterval:   connectInterval,
 		NumRequestPerConn: numRequestPerConn,
 		RequestInterval:   requestInterval,
-		RequestData:       Krand(requestSize-TIME_STAMP_LENGTH-1, KC_RAND_KIND_ALL),
+		RequestData:       Krand(requestSize-MSG_EXTRA_SIZE, KC_RAND_KIND_ALL),
 		TcpNoDelay:        tcpNoDelay,
+		BufioSize:         bufioSize,
 		WaitResponse:      waitResponse,
 		RttStep:           rttStep,
 		NumRttSteps:       numRttSteps,
@@ -360,12 +396,15 @@ func NewClientOption(netType string,
 }
 
 func (o *ClientOption) GetRequestSize() int {
-	return len(o.RequestData) + TIME_STAMP_LENGTH + 1
+	return len(o.RequestData) + MSG_EXTRA_SIZE
 }
 
 type Client struct {
 	//options
 	Opt *ClientOption
+
+	//a guess of responseSize
+	responseSizeGuess int
 
 	//list of testConn
 	testConnList []*testConn
@@ -413,6 +452,8 @@ func (c *Client) DoTest() {
 
 	c.doStatistics()
 }
+
+//can be used to check if we can access the server, and help guess the responseSize to auto determine bufio size
 func (c *Client) GetResponseSize() (size int, err error) {
 	conn, err := net.Dial(c.Opt.NetType, c.Opt.RemoteAddr)
 	if err != nil {
@@ -421,15 +462,14 @@ func (c *Client) GetResponseSize() (size int, err error) {
 	defer conn.Close()
 	br := bufio.NewReader(conn)
 	bw := bufio.NewWriter(conn)
-
-	m := Msg{time.Now(), c.Opt.RequestData}
+	m := NewMsg()
+	m.SetTimeStamp(time.Now().UnixNano())
+	m.SetData(c.Opt.RequestData)
 	if err = m.Send(bw); err != nil {
 		return 0, err
 	}
-	if err = m.Wait(br); err != nil {
-		return 0, err
-	}
-	return TIME_STAMP_LENGTH + len(m.Data), err
+	err = m.Wait(br)
+	return len(m.GetData()) + MSG_EXTRA_SIZE, err
 }
 
 func (c *Client) SaveConnStat(fileName string) error {
@@ -551,13 +591,24 @@ func (tc *testConn) doTest() {
 			}
 		}
 	}
-
-	bw := bufio.NewWriter(conn)
-	br := bufio.NewReader(conn)
+	var w io.Writer
+	var r io.Reader
+	if tc.c.Opt.BufioSize == 0 {
+		w = conn
+		r = conn
+	} else if tc.c.Opt.BufioSize < 0 {
+		w = bufio.NewWriterSize(conn, len(tc.c.Opt.RequestData)+MSG_EXTRA_SIZE)
+		r = bufio.NewReader(conn)
+	} else {
+		w = bufio.NewWriterSize(conn, tc.c.Opt.BufioSize)
+		r = bufio.NewReaderSize(conn, tc.c.Opt.BufioSize)
+	}
 
 	tc.latencyList = make([]time.Duration, 0, tc.c.Opt.NumRequestPerConn)
-	request := &Msg{time.Time{}, tc.c.Opt.RequestData}
-	response := &Msg{}
+	request := NewMsg()
+	request.SetTimeStamp(time.Now().UnixNano())
+	request.SetData(tc.c.Opt.RequestData)
+	response := NewMsg()
 	if tc.c.Opt.WaitResponse { //will wait response before sending another message
 		//send request, wait and handle response
 		needTick := tc.c.Opt.RequestInterval != 0
@@ -565,17 +616,16 @@ func (tc *testConn) doTest() {
 			ticker = time.NewTicker(tc.c.Opt.RequestInterval)
 		}
 		for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
-			sendTime := time.Now()
-			request.TimeStamp = sendTime
-			if err = request.Send(bw); err != nil {
+			sendTime := time.Now().UnixNano()
+			if err = request.Send(w); err != nil {
 				tc.err = err
 				return
 			}
-			if err = response.Wait(br); err != nil {
+			if err = response.Wait(r); err != nil {
 				tc.err = err
 				return
 			}
-			tc.latencyList = append(tc.latencyList, time.Now().Sub(sendTime))
+			tc.latencyList = append(tc.latencyList, time.Duration(time.Now().UnixNano()-sendTime))
 			if needTick {
 				<-ticker.C
 			}
@@ -586,13 +636,15 @@ func (tc *testConn) doTest() {
 		//launch routine for receiving and handling response
 		recvErrorChan := make(chan error, 1)
 		go func() {
+			var sendTime int64
 			var err error
 			for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
-				if err = response.Wait(br); err != nil {
+				if err = response.Wait(r); err != nil {
 					recvErrorChan <- err
 					return
 				}
-				tc.latencyList = append(tc.latencyList, time.Now().Sub(response.TimeStamp))
+				sendTime = response.GetTimeStamp()
+				tc.latencyList = append(tc.latencyList, time.Duration(time.Now().UnixNano()-sendTime))
 			}
 			recvErrorChan <- nil
 		}()
@@ -603,8 +655,8 @@ func (tc *testConn) doTest() {
 			ticker = time.NewTicker(tc.c.Opt.RequestInterval)
 		}
 		for i := 0; i < tc.c.Opt.NumRequestPerConn; i++ {
-			request.TimeStamp = time.Now()
-			if err = request.Send(bw); err != nil {
+			request.SetTimeStamp(time.Now().UnixNano())
+			if err = request.Send(w); err != nil {
 				tc.err = err
 				return
 			}
