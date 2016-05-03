@@ -59,7 +59,7 @@ func main() {
 
 	waitResponse := flag.Bool("wr", false, "wait response before sending another request. Won't wait by default.")
 
-	bufioSize := flag.Int("bufio", 0, "buffer size of bufio, 0 for no bufio, -1 for auto size.")
+	bufioSize := flag.Int("bufio", 4096, "buffer size of bufio in Byte, 0 for no bufio, -1 for auto size.")
 	tcpNoDelay := flag.Bool("tcpNoDelay", false, "set tcpNoDelay")
 
 	connStatFileName := flag.String("fc", "", "file name to save status of connections, empty for not to save the report")
