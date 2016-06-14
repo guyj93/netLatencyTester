@@ -310,8 +310,12 @@ func (s *Server) handleTestConnection(conn net.Conn) {
 	go func() { //sending
 		for {
 			m := <-sendChan
+			if m == nil {
+				return
+			}
 			err := m.Send(w)
 			if err != nil {
+				sendChan <- nil
 				conn.Close()
 				return
 			}
