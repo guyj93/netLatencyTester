@@ -315,7 +315,6 @@ func (s *Server) handleTestConnection(conn net.Conn) {
 			}
 			err := m.Send(w)
 			if err != nil {
-				sendChan <- nil
 				conn.Close()
 				return
 			}
@@ -328,6 +327,7 @@ func (s *Server) handleTestConnection(conn net.Conn) {
 		err := m.Wait(r)
 		if err != nil {
 			conn.Close()
+			sendChan <- nil
 			return
 		}
 
